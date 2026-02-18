@@ -56,8 +56,8 @@ function FindChoppingTool(source)
                 metadata = metadata,
                 toolData = toolData,
             }, nil
-            ::continue::
         end
+        ::continue::
     end
 
     return nil, 'no_tool'

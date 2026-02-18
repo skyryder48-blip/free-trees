@@ -202,7 +202,7 @@ end)
 -----------------------------------------------------------
 
 -- Smoke canister: disperse active bee swarm
-exports.ox_inventory:RegisterUsableItem('smoke_canister', function(source, item, data)
+exports.qbx_core:CreateUseableItem('smoke_canister', function(source, item)
     if not PlayerBeeSwarmActive[source] then
         lib.notify(source, { description = 'No bee swarm to disperse.', type = 'error' })
         return
@@ -225,7 +225,7 @@ exports.ox_inventory:RegisterUsableItem('smoke_canister', function(source, item,
 end)
 
 -- Chainsaw fuel: refuel equipped chainsaw
-exports.ox_inventory:RegisterUsableItem('chainsaw_fuel', function(source, item, data)
+exports.qbx_core:CreateUseableItem('chainsaw_fuel', function(source, item)
     local chainsaw = exports.ox_inventory:Search(source, 'slots', 'chainsaw')
     if not chainsaw or #chainsaw == 0 then
         lib.notify(source, { description = 'You need a chainsaw to refuel.', type = 'error' })
@@ -248,12 +248,12 @@ exports.ox_inventory:RegisterUsableItem('chainsaw_fuel', function(source, item, 
 end)
 
 -- Sharpening kit: triggers client-side tool selection
-exports.ox_inventory:RegisterUsableItem('sharpening_kit', function(source, item, data)
+exports.qbx_core:CreateUseableItem('sharpening_kit', function(source, item)
     TriggerClientEvent('forestry:client:sharpen:selectTool', source)
 end)
 
 -- Tree sapling: triggers client-side planting proximity check
-exports.ox_inventory:RegisterUsableItem('tree_sapling', function(source, item, data)
+exports.qbx_core:CreateUseableItem('tree_sapling', function(source, item)
     TriggerClientEvent('forestry:client:sapling:startPlant', source)
 end)
 
