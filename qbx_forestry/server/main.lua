@@ -19,8 +19,8 @@ PlayerBeeSwarmActive = {}
 ---@type table<number, integer>
 FellingCooldowns = {}
 
---- Felling cooldown duration in ms.
-local FELLING_COOLDOWN = 3000
+--- Felling cooldown duration in ms (configurable via Config.Progression.FellingCooldownMs).
+local FELLING_COOLDOWN = Config.Progression.FellingCooldownMs or 3000
 
 -----------------------------------------------------------
 -- HELPER: Get citizenid from source

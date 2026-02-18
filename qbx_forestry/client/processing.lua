@@ -255,3 +255,70 @@ function RegisterLogPropTarget(id, prop, logType, species)
         },
     })
 end
+
+-----------------------------------------------------------
+-- DROP OVERFLOW
+-- Server sends this when inventory is full. Spawns ground
+-- props near the player that can be picked up later.
+-----------------------------------------------------------
+RegisterNetEvent('forestry:client:dropOverflow', function(itemName, count, metadata)
+    local ped = cache.ped
+    local coords = GetEntityCoords(ped)
+
+    -- Determine which prop model to use based on item name
+    local propModel
+    local logType
+
+    -- Check if this is a log item
+    for lt, logConfig in pairs(Config.LogTypes) do
+        if logConfig.item == itemName then
+            logType = lt
+            local propConfig = Config.LogProps[lt]
+            if propConfig then
+                propModel = propConfig.model
+            end
+            break
+        end
+    end
+
+    -- Fallback to generic crate prop for non-log items
+    propModel = propModel or `prop_box_wood05a`
+
+    for i = 1, count do
+        lib.requestModel(propModel)
+        local offset = vec3(
+            math.random(-20, 20) / 10.0,
+            math.random(-20, 20) / 10.0,
+            0.0
+        )
+        local spawnPos = coords + offset
+
+        local prop = CreateObject(propModel, spawnPos.x, spawnPos.y, spawnPos.z, false, false, false)
+        if prop and prop ~= 0 then
+            PlaceObjectOnGroundProperly(prop)
+            FreezeEntityPosition(prop, true)
+
+            if logType then
+                local species = metadata and metadata.species or 'unknown'
+                RegisterLogPropTarget(math.random(100000, 999999), prop, logType, species)
+            else
+                -- Generic item pickup target
+                local id = math.random(100000, 999999)
+                exports.ox_target:addLocalEntity(prop, {
+                    {
+                        name = 'pickup_overflow_' .. id,
+                        icon = 'fa-solid fa-hand',
+                        label = 'Pick Up ' .. itemName:gsub('_', ' '),
+                        distance = 2.5,
+                        onSelect = function()
+                            exports.ox_target:removeLocalEntity(prop)
+                            DeleteEntity(prop)
+                            TriggerServerEvent('forestry:server:claimOverflow', itemName, 1, metadata)
+                        end,
+                    },
+                })
+            end
+        end
+        SetModelAsNoLongerNeeded(propModel)
+    end
+end)

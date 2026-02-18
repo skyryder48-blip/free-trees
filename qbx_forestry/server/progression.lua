@@ -105,9 +105,11 @@ end
 -----------------------------------------------------------
 -- FLUSH PLAYER XP
 -- Write pending XP to database for a specific player.
+-- Called directly (player disconnect) or from periodic thread.
 -----------------------------------------------------------
 ---@param citizenid string
 function FlushPlayerXP(citizenid)
+    -- Collect from PendingXP (may have new entries since swap)
     local xp = PendingXP[citizenid]
     if not xp then return end
     if xp.forestry == 0 and xp.woodworking == 0 then
@@ -121,7 +123,12 @@ function FlushPlayerXP(citizenid)
         return
     end
 
-    MySQL.update.await([[
+    -- Snapshot and clear before async DB call
+    local fXP = xp.forestry
+    local wXP = xp.woodworking
+    PendingXP[citizenid] = nil
+
+    local affected = MySQL.update.await([[
         UPDATE forestry_players
         SET forestry_xp = forestry_xp + ?,
             woodworking_xp = woodworking_xp + ?,
@@ -130,15 +137,23 @@ function FlushPlayerXP(citizenid)
             statistics = ?
         WHERE citizenid = ?
     ]], {
-        xp.forestry,
-        xp.woodworking,
+        fXP,
+        wXP,
         cache.forestryLevel,
         cache.woodworkingLevel,
         json.encode(cache.statistics or {}),
         citizenid,
     })
 
-    PendingXP[citizenid] = nil
+    if not affected or affected == 0 then
+        lib.print.error(('[Forestry] XP flush failed for %s (F:%d W:%d)'):format(citizenid, fXP, wXP))
+        -- Re-add to pending so it can be retried
+        if not PendingXP[citizenid] then
+            PendingXP[citizenid] = { forestry = 0, woodworking = 0 }
+        end
+        PendingXP[citizenid].forestry = PendingXP[citizenid].forestry + fXP
+        PendingXP[citizenid].woodworking = PendingXP[citizenid].woodworking + wXP
+    end
 end
 
 -----------------------------------------------------------
@@ -163,35 +178,20 @@ end
 -----------------------------------------------------------
 -- FLUSH ALL PENDING XP (periodic thread)
 -- Runs every FlushInterval (default 60s).
+-- Snapshots pending citizens, then flushes each.
 -----------------------------------------------------------
 CreateThread(function()
     while true do
         Wait(Config.Progression.FlushInterval or 60000)
 
-        for citizenid, xp in pairs(PendingXP) do
-            if xp.forestry > 0 or xp.woodworking > 0 then
-                local cache = PlayerCache[citizenid]
-                if cache then
-                    MySQL.update([[
-                        UPDATE forestry_players
-                        SET forestry_xp = forestry_xp + ?,
-                            woodworking_xp = woodworking_xp + ?,
-                            forestry_level = ?,
-                            woodworking_level = ?,
-                            statistics = ?
-                        WHERE citizenid = ?
-                    ]], {
-                        xp.forestry,
-                        xp.woodworking,
-                        cache.forestryLevel,
-                        cache.woodworkingLevel,
-                        json.encode(cache.statistics or {}),
-                        citizenid,
-                    })
-                end
-            end
+        -- Snapshot citizen IDs that need flushing
+        local citizens = {}
+        for citizenid in pairs(PendingXP) do
+            citizens[#citizens + 1] = citizenid
         end
 
-        PendingXP = {}
+        for _, citizenid in ipairs(citizens) do
+            FlushPlayerXP(citizenid)
+        end
     end
 end)

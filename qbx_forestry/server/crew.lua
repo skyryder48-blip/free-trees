@@ -104,12 +104,19 @@ function InviteToCrew(source, targetSource)
         return false, 'too_far'
     end
 
-    -- Target must be on duty
+    -- Target must be loaded and on forestry duty
     local targetCitizenid = GetCitizenId(targetSource)
     if not targetCitizenid then return false, 'target_not_loaded' end
 
     local targetCache = GetPlayerCache(targetCitizenid)
     if not targetCache then return false, 'target_not_loaded' end
+
+    local targetPlayer = exports.qbx_core:GetPlayer(targetSource)
+    if not targetPlayer then return false, 'target_not_loaded' end
+    local targetJob = targetPlayer.PlayerData.job
+    if targetJob.name ~= FORESTRY_JOB or not targetJob.onduty then
+        return false, 'target_off_duty'
+    end
 
     -- Send invite to target client
     local leaderCache = GetPlayerCacheBySource(source)
@@ -294,13 +301,18 @@ function GetCrewMembersNearPlayer(source, radius)
     local crew = Crews[crewId]
     if not crew then return 1 end
 
-    local sourceCoords = GetEntityCoords(GetPlayerPed(source))
+    local sourcePed = GetPlayerPed(source)
+    if not sourcePed or sourcePed == 0 then return 1 end
+    local sourceCoords = GetEntityCoords(sourcePed)
     local count = 0
 
     for memberSrc in pairs(crew.members) do
-        local memberCoords = GetEntityCoords(GetPlayerPed(memberSrc))
-        if #(sourceCoords - memberCoords) <= radius then
-            count = count + 1
+        local memberPed = GetPlayerPed(memberSrc)
+        if memberPed and memberPed ~= 0 then
+            local memberCoords = GetEntityCoords(memberPed)
+            if #(sourceCoords - memberCoords) <= radius then
+                count = count + 1
+            end
         end
     end
 
