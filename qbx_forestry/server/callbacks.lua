@@ -520,3 +520,237 @@ lib.callback.register('forestry:shop:purchase', function(source, itemName, qty)
 
     return true, nil
 end)
+
+-----------------------------------------------------------
+-- SAWMILL: COMPLETE
+-- Process station output, grant items, award XP.
+-- Called from client/sawmill.lua:449,597
+-----------------------------------------------------------
+lib.callback.register('forestry:sawmill:complete', function(source, stationId, inputItem, species, skillPassed, inputCount)
+    local citizenid = GetCitizenId(source)
+    if not citizenid then return false end
+
+    local cache = GetPlayerCache(citizenid)
+    if not cache then return false end
+
+    inputCount = inputCount or 1
+
+    -- Remove input item(s)
+    local removed = exports.ox_inventory:RemoveItem(source, inputItem, inputCount)
+    if not removed then return false, 'no_input' end
+
+    local forestryLevel = cache.forestryLevel or 0
+
+    -- Station output definitions (server-authoritative)
+    local outputs = {}
+    local byproducts = {}
+    local xpAmount = 0
+
+    if stationId == 'portable' then
+        -- Portable sawmill: log -> lumber_rough + sawdust
+        outputs[#outputs + 1] = { item = 'lumber_rough', count = 1, metadata = { species = species } }
+        byproducts[#byproducts + 1] = { item = 'sawdust', count = 1 }
+        xpAmount = Config.Progression.ForestryXP.sawmill_station or 10
+    elseif stationId == 'debarker' then
+        -- Mark log as debarked (re-add with metadata)
+        outputs[#outputs + 1] = { item = inputItem, count = 1, metadata = { species = species, debarked = true } }
+        byproducts[#byproducts + 1] = { item = 'bark_raw', count = 1 }
+        xpAmount = 8
+    elseif stationId == 'headsaw' then
+        local lumberCount = 2
+        -- Level 16: 15% bonus lumber
+        if forestryLevel >= 16 and math.random(100) <= 15 then
+            lumberCount = lumberCount + 1
+        end
+        outputs[#outputs + 1] = { item = 'lumber_rough', count = lumberCount, metadata = { species = species } }
+        local sawdustCount = 2
+        -- Level 38: sawdust doubled
+        if forestryLevel >= 38 then
+            sawdustCount = sawdustCount * 2
+        end
+        byproducts[#byproducts + 1] = { item = 'sawdust', count = sawdustCount }
+        xpAmount = skillPassed and 20 or 15
+    elseif stationId == 'edger' then
+        outputs[#outputs + 1] = { item = 'lumber_edged', count = 1, metadata = { species = species } }
+        xpAmount = 8
+    elseif stationId == 'planer' then
+        outputs[#outputs + 1] = { item = 'lumber_finished', count = 1, metadata = { species = species } }
+        xpAmount = skillPassed and 17 or 12
+    elseif stationId == 'crosscut_station' then
+        outputs[#outputs + 1] = { item = 'lumber_rough', count = 1, metadata = { species = species } }
+        byproducts[#byproducts + 1] = { item = 'wood_chips', count = 2 }
+        xpAmount = 8
+    elseif stationId == 'veneer' then
+        local veneerCount = 2
+        -- Level 26: +1 veneer
+        if forestryLevel >= 26 then
+            veneerCount = veneerCount + 1
+        end
+        outputs[#outputs + 1] = { item = 'veneer_sheet', count = veneerCount, metadata = { species = species } }
+        xpAmount = skillPassed and 35 or 25
+    elseif stationId == 'plywood' then
+        outputs[#outputs + 1] = { item = 'plywood_sheet', count = 1, metadata = { species = species } }
+        xpAmount = 20
+    elseif stationId == 'specialty' then
+        outputs[#outputs + 1] = { item = 'specialty_cut', count = 1, metadata = { species = species } }
+        xpAmount = skillPassed and 45 or 30
+    else
+        return false, 'unknown_station'
+    end
+
+    -- Level 45: 10% chance double output on any station
+    if forestryLevel >= 45 and math.random(100) <= 10 then
+        for _, output in ipairs(outputs) do
+            output.count = output.count * 2
+        end
+    end
+
+    -- Grant outputs
+    for _, output in ipairs(outputs) do
+        GrantItem(source, output.item, output.count, output.metadata)
+    end
+
+    -- Grant byproducts
+    for _, bp in ipairs(byproducts) do
+        GrantItem(source, bp.item, bp.count)
+    end
+
+    -- Award XP
+    AddForestryXP(source, xpAmount)
+    IncrementStat(citizenid, 'lumber_produced')
+
+    return true, { outputs = outputs, byproducts = byproducts }
+end)
+
+-----------------------------------------------------------
+-- CRAFTING: COMPLETE (Furniture)
+-- Validate WW level, remove ingredients, apply bonuses,
+-- grant furniture with metadata, award WW XP.
+-- Called from client/crafting.lua:204
+-----------------------------------------------------------
+lib.callback.register('forestry:crafting:complete', function(source, itemName, requiredSpecies)
+    local citizenid = GetCitizenId(source)
+    if not citizenid then return false, 'not_loaded' end
+
+    local cache = GetPlayerCache(citizenid)
+    if not cache then return false, 'not_loaded' end
+
+    -- Find recipe
+    local recipe = nil
+    for _, r in ipairs(Config.FurnitureRecipes) do
+        if r.item == itemName then
+            recipe = r
+            break
+        end
+    end
+
+    if not recipe then return false, 'unknown_recipe' end
+
+    -- Validate WW level
+    local wwLevel = cache.woodworkingLevel or 0
+    if wwLevel < recipe.level then
+        return false, ('Requires Woodworking Level %d.'):format(recipe.level)
+    end
+
+    -- Calculate material save chance
+    local materialSaveChance = 0
+    for level, bonus in pairs(Config.WoodworkingBonuses) do
+        if wwLevel >= level and bonus.materialSaveChance then
+            materialSaveChance = bonus.materialSaveChance
+        end
+    end
+
+    -- Validate and remove ingredients
+    for ingredientItem, ingredientCount in pairs(recipe.ingredients) do
+        -- Check species-specific lumber
+        if requiredSpecies and (ingredientItem == 'lumber_finished' or ingredientItem == 'lumber_rough') then
+            local slots = exports.ox_inventory:Search(source, 'slots', ingredientItem)
+            local speciesCount = 0
+            if slots then
+                for _, slot in ipairs(slots) do
+                    if slot.metadata and slot.metadata.species == requiredSpecies then
+                        speciesCount = speciesCount + slot.count
+                    end
+                end
+            end
+            if speciesCount < ingredientCount then
+                return false, ('Not enough %s %s.'):format(requiredSpecies, ingredientItem:gsub('_', ' '))
+            end
+        else
+            local count = exports.ox_inventory:Search(source, 'count', ingredientItem)
+            if not count or count < ingredientCount then
+                return false, ('Missing %s.'):format(ingredientItem:gsub('_', ' '))
+            end
+        end
+
+        -- Apply material save chance
+        local removeCount = ingredientCount
+        if materialSaveChance > 0 and math.random() < materialSaveChance then
+            removeCount = math.max(1, removeCount - 1)
+        end
+
+        exports.ox_inventory:RemoveItem(source, ingredientItem, removeCount)
+    end
+
+    -- Build metadata
+    local metadata = {}
+    if requiredSpecies then
+        metadata.species = requiredSpecies
+    end
+
+    -- Level 30: master label
+    local hasMasterLabel = false
+    for level, bonus in pairs(Config.WoodworkingBonuses) do
+        if wwLevel >= level and bonus.masterLabel then
+            hasMasterLabel = true
+        end
+    end
+    if hasMasterLabel then
+        metadata.crafter = cache.name or citizenid
+    end
+
+    -- Grant furniture item
+    local granted = GrantItem(source, itemName, 1, metadata)
+    if not granted then return false, 'Inventory full.' end
+
+    -- Award WW XP based on recipe level tier
+    local xpKey = ('craft_level%d'):format(recipe.level)
+    local xpAmount = Config.Progression.WoodworkingXP[xpKey] or 15
+    AddWoodworkingXP(source, xpAmount)
+
+    IncrementStat(citizenid, 'furniture_crafted')
+
+    local recipeLabel = recipe.label or itemName:gsub('furniture_', ''):gsub('_', ' ')
+    return true, { label = recipeLabel }
+end)
+
+-----------------------------------------------------------
+-- CRAFTING: COMPLETE SECONDARY
+-- Process secondary product recipes (firewood, pellets, etc).
+-- Called from client/crafting.lua:263
+-----------------------------------------------------------
+lib.callback.register('forestry:crafting:completeSecondary', function(source, itemName, ingredients)
+    local citizenid = GetCitizenId(source)
+    if not citizenid then return false end
+
+    -- Validate and remove ingredients
+    for ingredientItem, ingredientCount in pairs(ingredients) do
+        local count = exports.ox_inventory:Search(source, 'count', ingredientItem)
+        if not count or count < ingredientCount then
+            return false
+        end
+    end
+
+    for ingredientItem, ingredientCount in pairs(ingredients) do
+        exports.ox_inventory:RemoveItem(source, ingredientItem, ingredientCount)
+    end
+
+    -- Grant output item
+    local granted = GrantItem(source, itemName, 1)
+    if not granted then return false end
+
+    -- Award small forestry XP
+    AddForestryXP(source, 5)
+
+    return true
+end)
