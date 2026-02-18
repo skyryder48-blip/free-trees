@@ -19,8 +19,8 @@ PlayerBeeSwarmActive = {}
 ---@type table<number, integer>
 FellingCooldowns = {}
 
---- Felling cooldown duration in ms.
-local FELLING_COOLDOWN = 3000
+--- Felling cooldown duration in ms (configurable via Config.Progression.FellingCooldownMs).
+local FELLING_COOLDOWN = Config.Progression.FellingCooldownMs or 3000
 
 -----------------------------------------------------------
 -- HELPER: Get citizenid from source
@@ -100,9 +100,14 @@ local function OnPlayerLoaded(source)
     local forestryLevel = ForestryUtils.LevelFromXP(row.forestry_xp, Config.Progression.MaxForestryLevel)
     local woodworkingLevel = ForestryUtils.LevelFromXP(row.woodworking_xp, Config.Progression.MaxWoodworkingLevel)
 
+    -- Build display name from character info
+    local charinfo = player.PlayerData.charinfo
+    local name = charinfo and (charinfo.firstname .. ' ' .. charinfo.lastname) or citizenid
+
     PlayerCache[citizenid] = {
         source = source,
         citizenid = citizenid,
+        name = name,
         forestryXP = row.forestry_xp,
         forestryLevel = forestryLevel,
         woodworkingXP = row.woodworking_xp,

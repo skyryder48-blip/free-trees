@@ -126,13 +126,8 @@ lib.callback.register('forestry:felling:validate', function(source, treeKey, mod
         return false, 'unknown_species'
     end
 
-    -- 6. Validate tool
-    local toolInfo, toolErr
-    if toolName then
-        toolInfo, toolErr = FindSpecificTool(source, toolName)
-    else
-        toolInfo, toolErr = FindChoppingTool(source)
-    end
+    -- 6. Validate tool (server-authoritative: ignore client toolName)
+    local toolInfo, toolErr = FindChoppingTool(source)
 
     if not toolInfo then
         return false, 'tool_error:' .. (toolErr or 'unknown')
@@ -178,24 +173,33 @@ lib.callback.register('forestry:felling:complete', function(source, treeKey, mod
     -- Re-validate (prevent replay)
     if IsTreeFelled(treeKey) then return false end
 
+    -- Distance re-check (anti-teleport on completion)
+    local playerPed = GetPlayerPed(source)
+    if playerPed and playerPed ~= 0 then
+        local playerCoords = GetEntityCoords(playerPed)
+        if #(playerCoords - vec3(coords.x, coords.y, coords.z)) > 8.0 then
+            return false
+        end
+    end
+
     local speciesKey, speciesData = ForestryUtils.GetSpeciesFromModel(modelHash)
     if not speciesKey then return false end
 
-    -- Find and deduct from tool
-    local toolInfo = FindSpecificTool(source, toolName)
+    -- Find tool (server-authoritative: ignore client toolName)
+    local toolInfo = FindChoppingTool(source)
     if not toolInfo then return false end
 
-    -- Deduct tool durability
+    -- Record tree FIRST (prevents double-grant on crash between deduct and record)
+    local recorded = RecordFelledTree(treeKey, modelHash, speciesData.size)
+    if not recorded then return false end
+
+    -- THEN deduct tool durability
     DeductToolDurability(source, toolInfo, 1)
 
     -- Deduct chainsaw fuel if applicable
-    if toolName == 'chainsaw' then
+    if toolInfo.name == 'chainsaw' then
         DeductChainsawFuel(source, toolInfo, 1)
     end
-
-    -- Record felled tree
-    local recorded = RecordFelledTree(treeKey, modelHash, speciesData.size)
-    if not recorded then return false end
 
     -- Set cooldown
     SetFellingCooldown(source)
@@ -359,7 +363,7 @@ end)
 -----------------------------------------------------------
 lib.callback.register('forestry:economy:getContracts', function(source)
     local contracts = MySQL.query.await(
-        'SELECT * FROM forestry_contracts WHERE fulfilled = FALSE AND deadline > NOW() ORDER BY deadline ASC'
+        'SELECT * FROM forestry_contracts WHERE fulfilled = FALSE AND deadline > NOW() ORDER BY deadline ASC LIMIT 50'
     )
     return contracts or {}
 end)
@@ -417,9 +421,18 @@ lib.callback.register('forestry:crew:setRole', function(source, targetSource, ro
 end)
 
 -----------------------------------------------------------
--- OLD TIMER: GET MARKET DATA
+-- OLD TIMER: GET MARKET DATA (cached 30s)
 -----------------------------------------------------------
-lib.callback.register('forestry:oldtimer:getMarket', function(source)
+local marketCache = nil
+local marketCacheTime = 0
+local MARKET_CACHE_TTL = 30000
+
+local function RefreshMarketCache()
+    local now = GetGameTimer()
+    if marketCache and (now - marketCacheTime) < MARKET_CACHE_TTL then
+        return marketCache
+    end
+
     local multipliers = MySQL.query.await(
         'SELECT species, multiplier FROM forestry_export_multipliers'
     )
@@ -428,7 +441,6 @@ lib.callback.register('forestry:oldtimer:getMarket', function(source)
         'SELECT category, multiplier FROM forestry_furniture_export'
     )
 
-    -- Find hottest/coldest
     local hotSpecies, coldSpecies = nil, nil
     local hotMult, coldMult = 0, 999
 
@@ -458,7 +470,7 @@ lib.callback.register('forestry:oldtimer:getMarket', function(source)
         end
     end
 
-    return {
+    marketCache = {
         hotSpecies = hotSpecies,
         hotMult = hotMult,
         coldSpecies = coldSpecies,
@@ -468,6 +480,12 @@ lib.callback.register('forestry:oldtimer:getMarket', function(source)
         allSpecies = multipliers,
         allCategories = furnitureMultipliers,
     }
+    marketCacheTime = now
+    return marketCache
+end
+
+lib.callback.register('forestry:oldtimer:getMarket', function(source)
+    return RefreshMarketCache()
 end)
 
 -----------------------------------------------------------
@@ -533,7 +551,7 @@ lib.callback.register('forestry:sawmill:complete', function(source, stationId, i
     local cache = GetPlayerCache(citizenid)
     if not cache then return false end
 
-    inputCount = inputCount or 1
+    inputCount = math.max(1, math.min(inputCount or 1, 10))
 
     -- Remove input item(s)
     local removed = exports.ox_inventory:RemoveItem(source, inputItem, inputCount)
@@ -645,6 +663,11 @@ lib.callback.register('forestry:crafting:complete', function(source, itemName, r
     end
 
     if not recipe then return false, 'unknown_recipe' end
+
+    -- Validate species matches recipe requirement
+    if recipe.species and requiredSpecies and recipe.species ~= requiredSpecies then
+        return false, 'species_mismatch'
+    end
 
     -- Validate WW level
     local wwLevel = cache.woodworkingLevel or 0

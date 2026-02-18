@@ -160,6 +160,13 @@ RegisterNetEvent('forestry:client:xpGain', function(track, amount, total, level)
     elseif track == 'woodworking' then
         PlayerState.woodworkingLevel = level
     end
+
+    local trackLabel = track == 'forestry' and 'Forestry' or 'Woodworking'
+    lib.notify({
+        description = ('+%d %s XP'):format(amount, trackLabel),
+        type = 'inform',
+        duration = 2000,
+    })
 end)
 
 -----------------------------------------------------------
@@ -175,12 +182,23 @@ RegisterNetEvent('forestry:client:levelUp', function(track, newLevel)
         PlayerState.woodworkingLevel = newLevel
     end
 
+    -- Check for new unlocks at this level
+    local unlockMsg = ''
+    if track == 'forestry' and Config.ForestryUnlocks then
+        local unlock = Config.ForestryUnlocks[newLevel]
+        if unlock then
+            unlockMsg = '\nUnlocked: ' .. unlock
+        end
+    end
+
     lib.notify({
         title = track == 'forestry' and 'Forestry Level Up!' or 'Woodworking Level Up!',
-        description = ('You reached level %d!'):format(newLevel),
+        description = ('You reached level %d!%s'):format(newLevel, unlockMsg),
         type = 'success',
-        duration = 5000,
+        duration = 6000,
     })
+
+    PlaySoundFrontend(-1, 'RANK_UP', 'HUD_AWARDS', true)
 end)
 
 -----------------------------------------------------------

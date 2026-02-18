@@ -204,24 +204,47 @@ end
 
 -----------------------------------------------------------
 -- GRANT ITEM
--- Wrapper for ox_inventory:AddItem.
+-- Wrapper for ox_inventory:AddItem. Adds what fits in
+-- inventory; drops overflow as ground props near player.
 -----------------------------------------------------------
 ---@param source number
 ---@param itemName string
 ---@param count number
 ---@param metadata? table
----@return boolean success
+---@return boolean success (true if at least some were granted)
 function GrantItem(source, itemName, count, metadata)
-    if not exports.ox_inventory:CanCarryItem(source, itemName, count) then
-        TriggerClientEvent('ox_lib:notify', source, {
-            description = 'Inventory full.',
-            type = 'error',
-        })
-        return false
+    -- Fast path: everything fits
+    if exports.ox_inventory:CanCarryItem(source, itemName, count) then
+        local success = exports.ox_inventory:AddItem(source, itemName, count, metadata)
+        return success ~= false
     end
 
-    local success = exports.ox_inventory:AddItem(source, itemName, count, metadata)
-    return success ~= false
+    -- Partial fit: add one at a time until full
+    local added = 0
+    for _ = 1, count do
+        if exports.ox_inventory:CanCarryItem(source, itemName, 1) then
+            local ok = exports.ox_inventory:AddItem(source, itemName, 1, metadata)
+            if ok ~= false then
+                added = added + 1
+            else
+                break
+            end
+        else
+            break
+        end
+    end
+
+    local overflow = count - added
+    if overflow > 0 then
+        -- Tell client to spawn ground props for the overflow
+        TriggerClientEvent('forestry:client:dropOverflow', source, itemName, overflow, metadata)
+        TriggerClientEvent('ox_lib:notify', source, {
+            description = ('Inventory full! %dx %s dropped on the ground.'):format(overflow, itemName:gsub('_', ' ')),
+            type = 'warning',
+        })
+    end
+
+    return true
 end
 
 -----------------------------------------------------------
@@ -246,3 +269,22 @@ function GrantLogs(source, logType, speciesKey, quality, count)
 
     return GrantItem(source, itemName, count, metadata)
 end
+
+-----------------------------------------------------------
+-- CLAIM OVERFLOW
+-- Player picked up a dropped ground item. Re-attempt add.
+-----------------------------------------------------------
+RegisterNetEvent('forestry:server:claimOverflow', function(itemName, count, metadata)
+    local src = source
+    count = math.max(1, math.min(count or 1, 10))
+
+    if not exports.ox_inventory:CanCarryItem(src, itemName, count) then
+        TriggerClientEvent('ox_lib:notify', src, {
+            description = 'Still cannot carry this item.',
+            type = 'error',
+        })
+        return
+    end
+
+    exports.ox_inventory:AddItem(src, itemName, count, metadata)
+end)

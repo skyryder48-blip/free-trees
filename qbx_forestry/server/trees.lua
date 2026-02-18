@@ -30,10 +30,15 @@ function RecordFelledTree(treeKey, modelHash, treeSize)
 
     local respawnMinutes = sizeConfig.respawnMinutes
 
-    MySQL.insert.await(
+    local insertId = MySQL.insert.await(
         'INSERT INTO forestry_felled_trees (tree_key, model_hash, respawns_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE)) ON DUPLICATE KEY UPDATE felled_at = NOW(), respawns_at = DATE_ADD(NOW(), INTERVAL ? MINUTE)',
         { treeKey, modelHash, respawnMinutes, respawnMinutes }
     )
+
+    if not insertId then
+        lib.print.error(('[Forestry] Failed to record felled tree: %s'):format(treeKey))
+        return false
+    end
 
     FelledTrees[treeKey] = true
 
